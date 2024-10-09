@@ -8,9 +8,6 @@
 junit.xml
 
 # build
-/cjs
-/esm
-/types
 
 # misc
 .DS_Store

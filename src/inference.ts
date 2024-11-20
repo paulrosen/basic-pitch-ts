@@ -102,6 +102,7 @@ export class BasicPitch {
       OUTPUT_TO_TENSOR_NAME.contours,
     ]) as tf.Tensor3D[];
 
+    singleBatch.dispose();
     return [results[0], results[1], results[2]];
   }
 
@@ -110,21 +111,23 @@ export class BasicPitch {
    * @param singleChannelAudioData The mono audio signal.
    * @returns The audio padded and framed for input to the model.
    */
-  async prepareData(
+  prepareData(
     singleChannelAudioData: Float32Array,
-  ): Promise<[tf.Tensor3D, number]> {
-    const wavSamples = tf.concat1d([
-      tf.zeros([Math.floor(OVERLAP_LENGTH_FRAMES / 2)], 'float32'),
-      tf.tensor(singleChannelAudioData),
-    ]);
+  ): [tf.Tensor3D, number] {
+    return tf.tidy(() => {
+      const wavSamples = tf.concat1d([
+        tf.zeros([Math.floor(OVERLAP_LENGTH_FRAMES / 2)], 'float32'),
+        tf.tensor(singleChannelAudioData),
+      ]);
 
-    return [
-      tf.expandDims(
-        tf.signal.frame(wavSamples, AUDIO_N_SAMPLES, HOP_SIZE, true, 0),
-        -1,
-      ),
-      singleChannelAudioData.length,
-    ];
+      return [
+        tf.expandDims(
+          tf.signal.frame(wavSamples, AUDIO_N_SAMPLES, HOP_SIZE, true, 0),
+          -1,
+        ),
+        singleChannelAudioData.length,
+      ];
+    })
   }
 
   /**
@@ -133,17 +136,19 @@ export class BasicPitch {
    * @returns The output converted back to the mono input audio dimensions.
    */
   unwrapOutput(result: tf.Tensor3D): tf.Tensor2D {
-    let rawOutput = result;
-    // remove half of the overlapping frames from beginning and end
-    // - 2 * nOverlap, 1 for the nOverlap from the start and another from the
-    // one from the end
-    rawOutput = result.slice(
-      [0, N_OVERLAP_OVER_2, 0],
-      [-1, result.shape[1] - 2 * N_OVERLAP_OVER_2, -1],
-    );
+    return tf.tidy(() => {
+      let rawOutput = result;
+      // remove half of the overlapping frames from beginning and end
+      // - 2 * nOverlap, 1 for the nOverlap from the start and another from the
+      // one from the end
+      rawOutput = result.slice(
+        [0, N_OVERLAP_OVER_2, 0],
+        [-1, result.shape[1] - 2 * N_OVERLAP_OVER_2, -1],
+      );
 
-    const outputShape = rawOutput.shape;
-    return rawOutput.reshape([outputShape[0] * outputShape[1], outputShape[2]]);
+      const outputShape = rawOutput.shape;
+      return rawOutput.reshape([outputShape[0] * outputShape[1], outputShape[2]]);
+    })
   }
 
   /**
@@ -181,7 +186,7 @@ export class BasicPitch {
       }
       singleChannelAudioData = resampledBuffer.getChannelData(0);
     }
-    const [reshapedInput, audioOriginalLength] = await this.prepareData(
+    const [reshapedInput, audioOriginalLength] = this.prepareData(
       singleChannelAudioData,
     );
 
@@ -197,6 +202,9 @@ export class BasicPitch {
       let unwrappedResultingFrames = this.unwrapOutput(resultingFrames);
       let unwrappedResultingOnsets = this.unwrapOutput(resultingOnsets);
       let unwrappedResultingContours = this.unwrapOutput(resultingContours);
+      resultingFrames.dispose();
+      resultingOnsets.dispose();
+      resultingContours.dispose();
       // Lets try to replicate
       // return unwrapped_output[:n_output_frames_original, :]  # trim to original audio length
       // We are running this slice by slice so we have to be a tad tricky in how we extract the "slice"
@@ -207,18 +215,29 @@ export class BasicPitch {
       }
       if (calculatedFramesTmp + calculatedFrames >= nOutputFramesOriginal) {
         const framesToOutput = nOutputFramesOriginal - calculatedFrames;
-        unwrappedResultingFrames = unwrappedResultingFrames.slice(
-          [0, 0],
-          [framesToOutput, -1],
-        );
-        unwrappedResultingOnsets = unwrappedResultingOnsets.slice(
-          [0, 0],
-          [framesToOutput, -1],
-        );
-        unwrappedResultingContours = unwrappedResultingContours.slice(
-          [0, 0],
-          [framesToOutput, -1],
-        );
+        let unwrappedResultingFramesSliced = unwrappedResultingFrames.slice([0, 0], [framesToOutput, -1]);
+        unwrappedResultingFrames.dispose();
+        unwrappedResultingFrames = unwrappedResultingFramesSliced;
+
+        let unwrappedResultingOnsetsSliced = unwrappedResultingOnsets.slice([0, 0], [framesToOutput, -1]);
+        unwrappedResultingOnsets.dispose();
+        unwrappedResultingOnsets = unwrappedResultingOnsetsSliced;
+
+        let unwrappedResultingContoursSliced = unwrappedResultingContours.slice([0, 0], [framesToOutput, -1]);
+        unwrappedResultingContours.dispose();
+        unwrappedResultingContours = unwrappedResultingContoursSliced;
+        // unwrappedResultingFrames = unwrappedResultingFrames.slice(
+        //   [0, 0],
+        //   [framesToOutput, -1],
+        // );
+        // unwrappedResultingOnsets = unwrappedResultingOnsets.slice(
+        //   [0, 0],
+        //   [framesToOutput, -1],
+        // );
+        // unwrappedResultingContours = unwrappedResultingContours.slice(
+        //   [0, 0],
+        //   [framesToOutput, -1],
+        // );
       }
       calculatedFrames += calculatedFramesTmp;
       onComplete(
@@ -226,8 +245,12 @@ export class BasicPitch {
         await unwrappedResultingOnsets.array(),
         await unwrappedResultingContours.array(),
       );
+      unwrappedResultingFrames.dispose();
+      unwrappedResultingOnsets.dispose();
+      unwrappedResultingContours.dispose();
     }
 
+    reshapedInput.dispose();
     percentCallback(1.0);
   }
 }

@@ -12,7 +12,7 @@ export declare class BasicPitch {
         pitchBends: number[] | undefined;
     }[];
     evaluateSingleFrame(reshapedInput: tf.Tensor3D, batchNumber: number): Promise<[tf.Tensor3D, tf.Tensor3D, tf.Tensor3D]>;
-    prepareData(singleChannelAudioData: Float32Array): Promise<[tf.Tensor3D, number]>;
+    prepareData(singleChannelAudioData: Float32Array): [tf.Tensor3D, number];
     unwrapOutput(result: tf.Tensor3D): tf.Tensor2D;
     evaluateModel(resampledBuffer: AudioBuffer | Float32Array, onComplete: OnCompleteCallback, percentCallback: (percent: number) => void): Promise<void>;
 }

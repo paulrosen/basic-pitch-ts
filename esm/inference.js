@@ -41,23 +41,28 @@ export class BasicPitch {
             OUTPUT_TO_TENSOR_NAME.onsets,
             OUTPUT_TO_TENSOR_NAME.contours,
         ]);
+        singleBatch.dispose();
         return [results[0], results[1], results[2]];
     }
-    async prepareData(singleChannelAudioData) {
-        const wavSamples = tf.concat1d([
-            tf.zeros([Math.floor(OVERLAP_LENGTH_FRAMES / 2)], 'float32'),
-            tf.tensor(singleChannelAudioData),
-        ]);
-        return [
-            tf.expandDims(tf.signal.frame(wavSamples, AUDIO_N_SAMPLES, HOP_SIZE, true, 0), -1),
-            singleChannelAudioData.length,
-        ];
+    prepareData(singleChannelAudioData) {
+        return tf.tidy(() => {
+            const wavSamples = tf.concat1d([
+                tf.zeros([Math.floor(OVERLAP_LENGTH_FRAMES / 2)], 'float32'),
+                tf.tensor(singleChannelAudioData),
+            ]);
+            return [
+                tf.expandDims(tf.signal.frame(wavSamples, AUDIO_N_SAMPLES, HOP_SIZE, true, 0), -1),
+                singleChannelAudioData.length,
+            ];
+        });
     }
     unwrapOutput(result) {
-        let rawOutput = result;
-        rawOutput = result.slice([0, N_OVERLAP_OVER_2, 0], [-1, result.shape[1] - 2 * N_OVERLAP_OVER_2, -1]);
-        const outputShape = rawOutput.shape;
-        return rawOutput.reshape([outputShape[0] * outputShape[1], outputShape[2]]);
+        return tf.tidy(() => {
+            let rawOutput = result;
+            rawOutput = result.slice([0, N_OVERLAP_OVER_2, 0], [-1, result.shape[1] - 2 * N_OVERLAP_OVER_2, -1]);
+            const outputShape = rawOutput.shape;
+            return rawOutput.reshape([outputShape[0] * outputShape[1], outputShape[2]]);
+        });
     }
     async evaluateModel(resampledBuffer, onComplete, percentCallback) {
         let singleChannelAudioData;
@@ -75,7 +80,7 @@ export class BasicPitch {
             }
             singleChannelAudioData = resampledBuffer.getChannelData(0);
         }
-        const [reshapedInput, audioOriginalLength] = await this.prepareData(singleChannelAudioData);
+        const [reshapedInput, audioOriginalLength] = this.prepareData(singleChannelAudioData);
         const nOutputFramesOriginal = Math.floor(audioOriginalLength * (ANNOTATIONS_FPS / AUDIO_SAMPLE_RATE));
         let calculatedFrames = 0;
         for (let i = 0; i < reshapedInput.shape[0]; ++i) {
@@ -84,19 +89,32 @@ export class BasicPitch {
             let unwrappedResultingFrames = this.unwrapOutput(resultingFrames);
             let unwrappedResultingOnsets = this.unwrapOutput(resultingOnsets);
             let unwrappedResultingContours = this.unwrapOutput(resultingContours);
+            resultingFrames.dispose();
+            resultingOnsets.dispose();
+            resultingContours.dispose();
             const calculatedFramesTmp = unwrappedResultingFrames.shape[0];
             if (calculatedFrames >= nOutputFramesOriginal) {
                 continue;
             }
             if (calculatedFramesTmp + calculatedFrames >= nOutputFramesOriginal) {
                 const framesToOutput = nOutputFramesOriginal - calculatedFrames;
-                unwrappedResultingFrames = unwrappedResultingFrames.slice([0, 0], [framesToOutput, -1]);
-                unwrappedResultingOnsets = unwrappedResultingOnsets.slice([0, 0], [framesToOutput, -1]);
-                unwrappedResultingContours = unwrappedResultingContours.slice([0, 0], [framesToOutput, -1]);
+                let unwrappedResultingFramesSliced = unwrappedResultingFrames.slice([0, 0], [framesToOutput, -1]);
+                unwrappedResultingFrames.dispose();
+                unwrappedResultingFrames = unwrappedResultingFramesSliced;
+                let unwrappedResultingOnsetsSliced = unwrappedResultingOnsets.slice([0, 0], [framesToOutput, -1]);
+                unwrappedResultingOnsets.dispose();
+                unwrappedResultingOnsets = unwrappedResultingOnsetsSliced;
+                let unwrappedResultingContoursSliced = unwrappedResultingContours.slice([0, 0], [framesToOutput, -1]);
+                unwrappedResultingContours.dispose();
+                unwrappedResultingContours = unwrappedResultingContoursSliced;
             }
             calculatedFrames += calculatedFramesTmp;
             onComplete(await unwrappedResultingFrames.array(), await unwrappedResultingOnsets.array(), await unwrappedResultingContours.array());
+            unwrappedResultingFrames.dispose();
+            unwrappedResultingOnsets.dispose();
+            unwrappedResultingContours.dispose();
         }
+        reshapedInput.dispose();
         percentCallback(1.0);
     }
 }
